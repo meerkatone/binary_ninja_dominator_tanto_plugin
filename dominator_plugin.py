@@ -356,14 +356,20 @@ class RegisterSlicesTask(BackgroundTaskThread):
         BackgroundTaskThread.__init__(self, "Registering Dominator Analysis Slices", True)
     
     def run(self):
-        try:
-            # Wait a short time to ensure Tanto is initialized
-            import time
-            time.sleep(1)
-            register_slices()
-            log_info("Dominator Analysis slices registered successfully")
-        except Exception as e:
-            log_error(f"Failed to register Dominator Analysis slices: {str(e)}")
+        # Tanto may still be initializing when this plugin loads. Retry the
+        # registration with a short bounded backoff instead of guessing a
+        # fixed sleep, and fail loudly only after exhausting the attempts.
+        import time
+        last_error = None
+        for attempt in range(20):  # ~5s worst case at 0.25s steps
+            try:
+                register_slices()
+                log_info("Dominator Analysis slices registered successfully")
+                return
+            except Exception as e:
+                last_error = e
+                time.sleep(0.25)
+        log_error(f"Failed to register Dominator Analysis slices after retries: {last_error}")
 
 
 # Register slices when this plugin is loaded, but do it in a background task
