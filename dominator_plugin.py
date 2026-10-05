@@ -150,6 +150,36 @@ class DominanceSliceBase(Slice):
         flowgraph.append(node)
         return node
 
+    def build_full_tree(self, flowgraph, blocks, children_attribute):
+        blocks = list(blocks)
+        children = {block: list(getattr(block, children_attribute)) for block in blocks}
+        child_blocks = {child for values in children.values() for child in values}
+        roots = [block for block in blocks if block not in child_blocks]
+        nodes, visited, edges = {}, set(), set()
+
+        def node_for(block):
+            if block not in nodes:
+                nodes[block] = self.get_block_node(flowgraph, block)
+            return nodes[block]
+
+        # Include every root in the forest, including multiple function exits.
+        # The second pass also covers blocks in an unreachable/cyclic region.
+        for root in roots + blocks:
+            pending = [root]
+            while pending:
+                block = pending.pop()
+                parent = node_for(block)
+                if block in visited:
+                    continue
+                visited.add(block)
+                for child in children.get(block, ()):
+                    edge = (block, child)
+                    if edge not in edges:
+                        parent.add_outgoing_edge(BranchType.UnconditionalBranch, node_for(child))
+                        edges.add(edge)
+                    pending.append(child)
+        return flowgraph
+
 
 class PostDominatorTreeChildrenSlice(DominanceSliceBase):
     """Displays immediate post dominator tree children of the current block"""
@@ -179,29 +209,7 @@ class FullPostDominatorTreeSlice(DominanceSliceBase):
         if (function := tanto.helpers.get_current_il_function()) is None:
             return flowgraph
 
-        # Find the entry block of the post dominator tree
-        # This is typically the exit block of the function
-        exit_blocks = []
-        for block in function.basic_blocks:
-            if not block.outgoing_edges:
-                exit_blocks.append(block)
-
-        if not exit_blocks:
-            return flowgraph
-        
-        # Use the first exit block as our root
-        root_block = exit_blocks[0]
-        
-        root_node = self.get_block_node(flowgraph, root_block)
-
-        def add_children(block, parent_node):
-            for child in block.post_dominator_tree_children:
-                child_node = self.get_block_node(flowgraph, child)
-                parent_node.add_outgoing_edge(BranchType.UnconditionalBranch, child_node)
-                add_children(child, child_node)
-
-        add_children(root_block, root_node)
-        return flowgraph
+        return self.build_full_tree(flowgraph, function.basic_blocks, "post_dominator_tree_children")
 
 
 class PostDominanceFrontierSlice(DominanceSliceBase):
@@ -382,21 +390,7 @@ class FullDominatorTreeSlice(DominanceSliceBase):
         if (function := tanto.helpers.get_current_il_function()) is None:
             return flowgraph
 
-        # Use the entry block as the root for dominator tree
-        if len(function.basic_blocks) == 0:
-            return flowgraph
-            
-        root_block = function.basic_blocks[0]
-        root_node = self.get_block_node(flowgraph, root_block)
-
-        def add_children(block, parent_node):
-            for child in block.dominator_tree_children:
-                child_node = self.get_block_node(flowgraph, child)
-                parent_node.add_outgoing_edge(BranchType.UnconditionalBranch, child_node)
-                add_children(child, child_node)
-
-        add_children(root_block, root_node)
-        return flowgraph
+        return self.build_full_tree(flowgraph, function.basic_blocks, "dominator_tree_children")
 
 
 class IteratedDominanceFrontierSlice(DominanceSliceBase):
