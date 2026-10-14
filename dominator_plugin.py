@@ -1462,21 +1462,33 @@ class InterproceduralSSABidirectionalSlice(SSADataflowSliceBase):
 
 
 # Register all slice types with Tanto
+# Register only the unique views that don't conflict with Tanto's built-in views
+SLICE_TYPES = (
+    ("Iterated Dominance Frontier", IteratedDominanceFrontierSlice),
+    ("Immediate Dominator", ImmediateDominatorSlice),
+    ("Strict Dominators", StrictDominatorsSlice),
+    ("Full Dominator Tree", FullDominatorTreeSlice),
+    ("Immediate Post Dominator", ImmediatePostDominatorSlice),
+    ("Full Post Dominator Tree", FullPostDominatorTreeSlice),
+    ("SSA Backward Slice (Intra)", IntraproceduralSSABackwardSlice),
+    ("SSA Forward Slice (Intra)", IntraproceduralSSAForwardSlice),
+    ("SSA Def-Use Slice (Intra)", IntraproceduralSSABidirectionalSlice),
+    ("SSA Backward Slice (Boundary)", BoundarySSABackwardSlice),
+    ("SSA Backward Slice (Inter)", InterproceduralSSABackwardSlice),
+    ("SSA Forward Slice (Inter)", InterproceduralSSAForwardSlice),
+    ("SSA Def-Use Slice (Inter)", InterproceduralSSABidirectionalSlice),
+)
+_registered_slices: Set[str] = set()
+
+
 def register_slices():
-    # Register only the unique views that don't conflict with Tanto's built-in views
-    TantoView.register_slice_type("Iterated Dominance Frontier", IteratedDominanceFrontierSlice)
-    TantoView.register_slice_type("Immediate Dominator", ImmediateDominatorSlice)
-    TantoView.register_slice_type("Strict Dominators", StrictDominatorsSlice)
-    TantoView.register_slice_type("Full Dominator Tree", FullDominatorTreeSlice)
-    TantoView.register_slice_type("Immediate Post Dominator", ImmediatePostDominatorSlice)
-    TantoView.register_slice_type("Full Post Dominator Tree", FullPostDominatorTreeSlice)
-    TantoView.register_slice_type("SSA Backward Slice (Intra)", IntraproceduralSSABackwardSlice)
-    TantoView.register_slice_type("SSA Forward Slice (Intra)", IntraproceduralSSAForwardSlice)
-    TantoView.register_slice_type("SSA Def-Use Slice (Intra)", IntraproceduralSSABidirectionalSlice)
-    TantoView.register_slice_type("SSA Backward Slice (Boundary)", BoundarySSABackwardSlice)
-    TantoView.register_slice_type("SSA Backward Slice (Inter)", InterproceduralSSABackwardSlice)
-    TantoView.register_slice_type("SSA Forward Slice (Inter)", InterproceduralSSAForwardSlice)
-    TantoView.register_slice_type("SSA Def-Use Slice (Inter)", InterproceduralSSABidirectionalSlice)
+    # Retries resume after the last successful registration instead of
+    # registering earlier slice types a second time.
+    for name, slice_type in SLICE_TYPES:
+        if name in _registered_slices:
+            continue
+        TantoView.register_slice_type(name, slice_type)
+        _registered_slices.add(name)
 
 
 # We'll register the slices in a background task to ensure Tanto is properly initialized
