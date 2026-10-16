@@ -40,7 +40,10 @@ The plugin also adds MLIL SSA dataflow slice types:
 6. **SSA Forward Slice (Inter)** - Forward uses with bounded caller/callee traversal.
 7. **SSA Def-Use Slice (Inter)** - Bidirectional interprocedural graph.
 
-The slices seed from the selected SSA variable or expression. If selection is ambiguous, use the right-click seed actions described below.
+The slices seed from the selected SSA variable or expression. Variable-token
+selection reads the highlighted local variable from Binary Ninja's highlight
+state and preserves a displayed SSA version such as `length#3`. If selection
+is ambiguous, use the right-click seed actions described below.
 
 ## Common Workflow: memcpy Size Review
 

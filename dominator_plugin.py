@@ -643,17 +643,16 @@ def _selected_ssa_var_from_token():
         if view_context is None or view_context.getCurrentView() is None:
             return None, None
         hts = view_context.getCurrentView().getHighlightTokenState()
-        if hts is None or not hts.valid:
-            return None, None
-        token = hts.token
-        if not getattr(token, "localVarValid", False):
+        # localVarValid/localVar belong to the HighlightTokenState itself;
+        # hts.token is the plain InstructionTextToken, which has neither.
+        if hts is None or not hts.valid or not getattr(hts, "localVarValid", False):
             return None, None
         source_func = tanto.helpers.get_current_source_function()
         func_ssa = _mlil_ssa_function(source_func)
         if func_ssa is None:
             return None, None
-        var = binaryninja.Variable.from_core_variable(func_ssa, token.localVar)
-        token_text = str(token.token)
+        var = binaryninja.Variable.from_core_variable(func_ssa, hts.localVar)
+        token_text = getattr(hts.token, "text", None) or str(hts.token)
         if "#" in token_text:
             version_text = token_text.rsplit("#", 1)[-1]
             try:
