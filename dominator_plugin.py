@@ -1501,7 +1501,7 @@ class RegisterSlicesTask(BackgroundTaskThread):
         # fixed sleep, and fail loudly only after exhausting the attempts.
         import time
         last_error = None
-        for attempt in range(20):  # ~5s worst case at 0.25s steps
+        for _attempt in range(20):  # ~5s worst case at 0.25s steps
             try:
                 register_slices()
                 log_info("Dominator Analysis slices registered successfully")
