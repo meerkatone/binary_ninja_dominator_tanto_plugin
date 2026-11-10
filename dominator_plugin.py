@@ -406,12 +406,11 @@ class IteratedDominanceFrontierSlice(DominanceSliceBase):
         node = self.get_block_node(flowgraph, current_block)
         
         # Calculate iterated dominance frontier
-        blocks = set([current_block])
         frontier = set()
-        worklist = list(blocks)
-        
+        worklist = deque([current_block])
+
         while worklist:
-            block = worklist.pop(0)
+            block = worklist.popleft()
             for df_block in block.dominance_frontier:
                 if df_block not in frontier:
                     frontier.add(df_block)
@@ -810,6 +809,10 @@ def _callsite_param_ssa_vars(
         refs = list(bv.get_code_refs(callee_start))
     except Exception:
         return seeds
+    def calls_callee(instr) -> bool:
+        return _is_call_expr(instr) and _callee_address(instr) == callee_start
+
+    seen_calls: Set[Tuple[int, int]] = set()
     for ref in refs:
         caller = ref.function
         func_ssa = _mlil_ssa_function(caller)
@@ -822,15 +825,24 @@ def _callsite_param_ssa_vars(
                 candidates.append(func_ssa[idx])
         except Exception:
             pass
-        try:
-            for instr in func_ssa.instructions:
-                if instr.address == ref.address:
-                    candidates.append(instr)
-        except Exception:
-            pass
+        # Several MLIL instructions can share the call's address. Walk the
+        # whole function for them only when the first one is not the call:
+        # the walk used to run for every reference and returned the call a
+        # second time, which doubled every seed and graph edge.
+        if not any(calls_callee(instr) for instr in candidates):
+            try:
+                candidates = [
+                    instr for instr in func_ssa.instructions if instr.address == ref.address
+                ]
+            except Exception:
+                candidates = []
         for instr in candidates:
-            if not _is_call_expr(instr) or _callee_address(instr) != callee_start:
+            if not calls_callee(instr):
                 continue
+            call_key = _expr_key(instr)
+            if call_key in seen_calls:
+                continue
+            seen_calls.add(call_key)
             params = _call_params(instr)
             if param_idx >= len(params):
                 continue
@@ -920,6 +932,7 @@ def _backward_summary_lines(func_ssa, seed_vars, max_lines: int = 32) -> List[st
     lines: List[str] = []
     queue = deque((func_ssa, var, 0) for var in seed_vars)
     visited: Set[Tuple[int, str]] = set()
+    fanout = _ssa_setting("fanout")
     while queue and len(lines) < max_lines:
         cur_func_ssa, var, depth = queue.popleft()
         if not _is_ssa_var(var):
@@ -945,7 +958,7 @@ def _backward_summary_lines(func_ssa, seed_vars, max_lines: int = 32) -> List[st
 
         role = _expr_role(defn, "def")
         lines.append(f"{indent}{_ssa_var_name(var)} <- {role}: {_summary_expr_text(defn)}")
-        for src_var in _ssa_vars_of_expression(defn)[:_ssa_setting("fanout")]:
+        for src_var in _ssa_vars_of_expression(defn)[:fanout]:
             queue.append((cur_func_ssa, src_var, depth + 1))
     if queue:
         lines.append("... summary truncated")
@@ -1166,7 +1179,7 @@ class SSADataflowSliceBase(Slice):
 
         def expr_node(expr, role):
             role = _expr_role(expr, role)
-            key = (_expr_key(expr)[0], _expr_key(expr)[1], role)
+            key = (*_expr_key(expr), role)
             node = expr_nodes.get(key)
             if node is None:
                 node = FlowGraphNode(flowgraph)
@@ -1232,10 +1245,16 @@ class SSADataflowSliceBase(Slice):
                     param_idx = _param_index_of(cur_func_ssa.source_function, var)
                     if param_idx is not None:
                         caller_seeds = _callsite_param_ssa_vars(self.bv, cur_func_ssa.source_function.start, param_idx)[:fanout]
+                        linked_calls = set()
                         for call_instr, caller_ssa, caller_var in caller_seeds:
                             call_node = expr_node(call_instr, f"arg->param{param_idx}")
                             var_node(caller_ssa, caller_var).add_outgoing_edge(BranchType.TrueBranch, call_node)
-                            call_node.add_outgoing_edge(BranchType.TrueBranch, sink_node)
+                            # An argument such as `a + b` seeds two variables
+                            # from one call; link that call to the parameter once.
+                            call_key = _expr_key(call_instr)
+                            if call_key not in linked_calls:
+                                linked_calls.add(call_key)
+                                call_node.add_outgoing_edge(BranchType.TrueBranch, sink_node)
                             queue.append((caller_ssa, caller_var, depth + 1, hops + 1))
                             edges += 1
                         if not caller_seeds:
@@ -1625,47 +1644,49 @@ def generate_iterated_dominance_frontier_mermaid(bv, function_address, variable_
     """
     func = bv.get_function_at(function_address)
     mermaid_syntax = "graph TD;\n"
-    
+
     if func is not None:
+        # basic_blocks builds a new list on every access; fetch it once.
+        basic_blocks = list(func.basic_blocks)
+
         # Add all blocks first
-        for bb in func.basic_blocks:
+        for bb in basic_blocks:
             mermaid_syntax += f"BB{hex(bb.start)}(({hex(bb.start)}))\n"
-        
+
         # If no variable blocks specified, use the first block
-        if variable_blocks is None and len(func.basic_blocks) > 0:
-            variable_blocks = [func.basic_blocks[0].start]
-        
+        if variable_blocks is None and basic_blocks:
+            variable_blocks = [basic_blocks[0].start]
+
         if variable_blocks:
             # Calculate iterated dominance frontier
-            blocks = set()
-            for addr in variable_blocks:
-                for bb in func.basic_blocks:
-                    if bb.start == addr:
-                        blocks.add(bb)
-                        break
-            
+            by_start = {}
+            for bb in basic_blocks:
+                by_start.setdefault(bb.start, bb)
+            blocks = {by_start[addr] for addr in variable_blocks if addr in by_start}
+
             frontier = set()
-            worklist = list(blocks)
-            
+            worklist = deque(blocks)
+
             while worklist:
-                block = worklist.pop(0)
+                block = worklist.popleft()
                 for df_block in block.dominance_frontier:
                     if df_block not in frontier:
                         frontier.add(df_block)
                         worklist.append(df_block)
-            
+
             # Style the variable definition blocks
             for block in blocks:
                 mermaid_syntax += f"style BB{hex(block.start)} fill:#afa,stroke:#6a6\n"
-            
-            # Style the frontier blocks and add edges
+
+            # Add the frontier edges, then style each frontier block once
             for block in blocks:
                 for frontier_block in frontier:
                     mermaid_syntax += f"BB{hex(block.start)} -->|IDF| BB{hex(frontier_block.start)}\n"
-                    mermaid_syntax += f"style BB{hex(frontier_block.start)} fill:#faa,stroke:#a66\n"
+            for frontier_block in frontier:
+                mermaid_syntax += f"style BB{hex(frontier_block.start)} fill:#faa,stroke:#a66\n"
     else:
         mermaid_syntax = f"No function found at address {hex(function_address)}"
-    
+
     return "```mermaid\n" + mermaid_syntax + "\n```"
 
 
